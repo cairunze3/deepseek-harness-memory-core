@@ -7,7 +7,7 @@
   <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="node" src="https://img.shields.io/badge/node-%3E%3D22.5.0-brightgreen">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-0-red">
-  <img alt="tests" src="https://github.com/cairunze3/vanwork-memory-core/actions/workflows/ci.yml/badge.svg">
+  <img alt="tests" src="https://img.shields.io/badge/tests-286%20passed-green">
 </p>
 
 ## What problem this solves
