@@ -1,8 +1,28 @@
 {
   "name": "vanwork-memory-core",
   "version": "0.4.1",
-  "description": "VanWork 本地记忆核心层：索引常驻 + 硬预算 + BM25/混合检索 + 取代式修正 + 自动整合 + 云端分层策略，并把记忆的写入编排（锁/备份/原子写/取代留档）与常驻注入一并接管。与 dsh-memory-evolve 共用同一份 Markdown 正本、不抢占工具名、零平台包依赖。",
+  "description": "Zero-dependency memory core for AI agents: resident indexing with a hard budget, BM25/hybrid retrieval, superseding edits, auditable consolidation, and cloud-tier classification. Plain Markdown canon, fully rebuildable derived index.",
   "license": "MIT",
+  "keywords": [
+    "memory",
+    "agent-memory",
+    "ai-agent",
+    "llm",
+    "bm25",
+    "retrieval",
+    "rag",
+    "rrf",
+    "embeddings",
+    "plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cairunze3/vanwork-memory-core.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cairunze3/vanwork-memory-core/issues"
+  },
+  "homepage": "https://github.com/cairunze3/vanwork-memory-core#readme",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
