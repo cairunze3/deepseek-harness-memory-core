@@ -1,0 +1,7 @@
+# vanwork-memory-core bundle patch: inserts the host row into the profile's
+# plugin roster. `dsh plugin --profile web add <path>` applies this automatically,
+# so do NOT insert this row again in the profile's own cordis.patch.yml
+# (a duplicate loader entry id crashes the loader).
+- insert:
+    - id: vanwork-memory-core
+      name: 'vanwork-memory-core'
