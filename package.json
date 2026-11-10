@@ -1,7 +1,7 @@
 {
   "name": "vanwork-memory-core",
-  "version": "0.4.1",
-  "description": "Zero-dependency memory core for AI agents: resident indexing with a hard budget, BM25/hybrid retrieval, superseding edits, auditable consolidation, and cloud-tier classification. Plain Markdown canon, fully rebuildable derived index.",
+  "version": "0.8.1",
+  "description": "Zero-dependency memory core for AI agents: pointer/core preloading, resident indexing with a hard budget, BM25/hybrid retrieval, daily-first writes, queue evidence thresholds, session-boundary extraction, superseding edits, auditable consolidation, and cloud-tier classification. Plain Markdown canon, fully rebuildable derived index.",
   "license": "MIT",
   "keywords": [
     "memory",
@@ -44,6 +44,9 @@
     "test:inproc": "node scripts/test-inproc.mjs",
     "smoke:client": "node scripts/client-smoke.mjs",
     "verify": "node scripts/verify.mjs",
+    "eval": "node scripts/eval-memory.mjs",
+    "repair:tags": "node scripts/repair-inline-tags.mjs",
+    "calibrate": "node scripts/calibrate-search.mjs",
     "profile:config": "node scripts/apply-profile-config.mjs",
     "profile:config:apply": "node scripts/apply-profile-config.mjs --apply",
     "probe:mount": "node scripts/mount-probe.mjs",

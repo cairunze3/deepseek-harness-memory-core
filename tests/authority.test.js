@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import { after, beforeEach, describe, it } from 'node:test'
+import { zstdCompressSync } from 'node:zlib'
 
 import { appendEntry, LEGACY_LOCK_NAME, removeEntries, replaceEntry, withFileWriteLock, WRITE_LOCK_TIMEOUT_MS } from '../lib/memfile.js'
 import { buildAudit, renderAudit, PASS, WARN } from '../lib/audit.js'
@@ -28,14 +29,37 @@ after(() => { try { rmSync(sandbox, { recursive: true, force: true }) } catch { 
 
 let memoryDir
 let coreDir
+// 单元测试不许碰本机真实宿主：不隔离 dshHome 时 sessionDigestOnce 会去读 ~/.dsh
+// 里真实的历史会话，用例结果随机器上"有没有旧会话"漂移（449/450 那次失败就是证据）。
+let dshHome
 beforeEach(() => {
   memoryDir = mkdtempSync(join(sandbox, 'mem-'))
   coreDir = mkdtempSync(join(sandbox, 'core-'))
+  dshHome = mkdtempSync(join(sandbox, 'dsh-'))
 })
 
 /** 造一个最简 agent（只有 cwd 与 session.id，够 runtime 用）。 */
 function agent(id, cwd = null) {
   return { session: { id, header: cwd ? { cwd } : {} } }
+}
+
+/**
+ * 造一个"确实能被端出摘要"的上一会话（多帧 zstd 的真实格式）。
+ * 有了它，`emptyIndexHint=false` 的空串断言才有牙齿：否则本机恰好没有可抽会话时，
+ * 缺陷代码也会返回空串，测试会假通过。
+ */
+function writePendingSession(id, text) {
+  const dir = join(dshHome, 'sessions', '--C-demo-proj--', id)
+  mkdirSync(dir, { recursive: true })
+  const events = [
+    { type: 'session', id, createdAt: Date.now() },
+    { type: 'user/message', data: { content: [{ type: 'text', text }], source: { kind: 'user' }, role: 'user' } },
+  ]
+  const file = join(dir, 'session.v4.jsonl.zstd')
+  writeFileSync(file, zstdCompressSync(Buffer.from(events.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8')))
+  const at = Date.now() - 60_000
+  utimesSync(file, new Date(at), new Date(at))
+  return file
 }
 
 function readEntries(file) {
@@ -130,7 +154,7 @@ describe('写原语：跨进程锁与锁内重读', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('每轮写入交接（接管旧实现的看门狗）', () => {
   function runtimeOf(extra = {}) {
-    return createRuntime({ config: { memoryDir, coreDir, ...extra }, logger: { info() {}, warn() {} } })
+    return createRuntime({ config: { memoryDir, coreDir, dshHome, ...extra }, logger: { info() {}, warn() {} } })
   }
 
   it('轮次按会话分段，写入只归零本会话', () => {
@@ -166,11 +190,66 @@ describe('每轮写入交接（接管旧实现的看门狗）', () => {
     assert.equal(renderWriteHint({ turnsSinceWrite: 9 }, { ...config, writeReminder: false }), '')
   })
 
-  it('记忆为空时不注入任何东西（也不记账）', () => {
-    const rt = runtimeOf()
+  // 0.4.8：空库不再"一行都不注入"。旧契约（空串）导致第一轮模型连"有记忆工具"都不知道，
+  // 实测三次都在首条种子句上丢事实。现在只注入几行提示，且仍然不记账。
+  // 0.6.2：空库这一屏也要求"先流水后结论"（空库是模型最容易照着塑形的时刻）。
+  it('记忆为空时注入"先写后答"提示（含先流水），但不记账', () => {
+    const rt = runtimeOf({ indexMode: 'index' })
     const text = renderSnapshotFor(rt, { agent: agent('sess-empty') })
-    assert.equal(text, '')
+    assert.ok(text.includes('<memory_index>'), text)
+    assert.ok(text.includes('track="daily"'), '空库提示没要求先追加 daily 流水')
+    assert.ok(text.includes('mem_write(confirm=true'), text)
+    assert.ok(text.includes('静默') && text.includes('不要播报'), '空库提示没要求静默执行、不播报')
     assert.equal(rt.turnsSinceWriteOf(agent('sess-empty')), 0, '空记忆集不该消耗轮次')
+  })
+
+  it('emptyIndexHint=false 时回到"什么都不注入"', () => {
+    const rt = runtimeOf({ emptyIndexHint: false })
+    assert.equal(renderSnapshotFor(rt, { agent: agent('sess-empty') }), '')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 0.6.2 解包自检 449/450 暴露的真缺陷：关掉空库提示后，会话边界摘要仍被
+// withDigest 拼回注入文本，"什么都不注入"的旧契约从后门失效。
+// 这组用例必须自己造出可抽会话，否则空串断言只是"碰巧没摘要"的假通过。
+describe('emptyIndexHint=false：零注入是整条链路的契约', () => {
+  function runtimeWithDigest(extra = {}) {
+    writePendingSession('session-prev-hint', '上一个会话里定了项目代号 PX-17，并且排除了证书过期')
+    return createRuntime({
+      config: { memoryDir, coreDir, dshHome, sessionExtractMinAgeMs: 0, ...extra },
+      logger: { info() {}, warn() {} },
+    })
+  }
+
+  it('前提自检：不关开关时，空库确实会端出会话摘要（否则后面是假通过）', () => {
+    const rt = runtimeWithDigest()
+    const text = renderSnapshotFor(rt, { agent: agent('sess-hint-baseline') })
+    assert.match(text, /<session_digest /, '环境没造出可抽会话，这组用例会失去牙齿')
+    assert.match(text, /<memory_index/)
+  })
+
+  it('pointer 模式：关掉开关后一行都不注入（含会话摘要）', () => {
+    const rt = runtimeWithDigest({ emptyIndexHint: false })
+    assert.equal(renderSnapshotFor(rt, { agent: agent('sess-hint-pointer') }), '')
+  })
+
+  it('index 模式：同样一行都不注入（两条分支不许分叉）', () => {
+    const rt = runtimeWithDigest({ emptyIndexHint: false, indexMode: 'index' })
+    assert.equal(renderSnapshotFor(rt, { agent: agent('sess-hint-index') }), '')
+  })
+
+  it('记忆库非空时不受开关影响：摘要照常注入（不许误伤）', () => {
+    const rt = runtimeWithDigest({ emptyIndexHint: false })
+    const outcome = appendEntry(join(memoryDir, 'MEMORY.md'), '项目代号 PX-17', {
+      backupDir: join(coreDir, 'backups'), stamp: '2026-01-01',
+    })
+    assert.equal(outcome.ok, true)
+    rt.invalidate()
+    const text = renderSnapshotFor(rt, { agent: agent('sess-hint-nonempty') })
+    assert.match(text, /<session_digest /, '非空库时摘要不该被关掉')
+    assert.match(text, /<memory_index/, '非空库时索引块不该被关掉')
+    assert.match(text, /条目 1/, '这一条得真的是"记忆库非空"的场景')
   })
 })
 

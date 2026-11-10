@@ -53,6 +53,36 @@ describe('splitIntoEntries', () => {
     assert.equal(splitIntoEntries('就是一段话', 'x.md').length, 1)
     assert.equal(splitIntoEntries('   \n  ', 'x.md').length, 0)
   })
+
+  // 回归（2026-11-02 记忆插件 A/B 测试实测缺陷）：
+  // buildBody 把 `[summary:…]` 放在时间戳**前**且独占一行，若切块把它当成条目起点，
+  // 摘要会被切成一条独立记忆、上一条正文还会与下一条摘要粘在同一个 chunk 里。
+  it('标签行是下一条目的前缀，不能切成独立条目', () => {
+    const text = [
+      '[summary:A 的摘要]',
+      '[2026-11-02 10:00] A 的正文',
+      '[summary:B 的摘要]',
+      '[2026-11-02 11:00] B 的正文',
+    ].join('\n')
+    const entries = splitIntoEntries(text, 'KEY.md')
+    assert.equal(entries.length, 2, '两条正文 → 两条条目，摘要不算独立条目')
+    assert.match(entries[0].body, /^\[summary:A 的摘要\]/)
+    assert.match(entries[0].body, /A 的正文/)
+    assert.ok(!entries[0].body.includes('B 的摘要'), 'A 条目不得粘上 B 的摘要')
+    assert.match(entries[1].body, /^\[summary:B 的摘要\]/)
+  })
+
+  it('多个标签行（id + summary）仍算同一前缀', () => {
+    const text = '[id:abc]\n[summary:摘要]\n[2026-11-02 10:00] 正文一\n[2026-11-02 11:00] 正文二'
+    const entries = splitIntoEntries(text, 'x.md')
+    assert.equal(entries.length, 2)
+    assert.match(entries[0].body, /正文一/)
+  })
+
+  it('正文里出现的标签不是前缀，不影响已有切分', () => {
+    const entries = splitIntoEntries('[2026-11-02 10:00] 正文提到 [summary:这个写法] 但不是前缀', 'x.md')
+    assert.equal(entries.length, 1)
+  })
 })
 
 describe('classifyFile', () => {

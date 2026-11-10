@@ -67,6 +67,28 @@ describe('① 格式体检：把"改坏了"变成可发现', () => {
     assert.ok(leading.issues.some((item) => item.code === 'leading-delimiter'))
   })
 
+  // 回归（2026-11-02 记忆插件 A/B 测试实测损坏形态）：
+  // 上一条正文与下一条摘要被粘成一行（`…信息）[summary:…]`），说明两条记忆被并成一条。
+  it('行内标签（正文与下一条摘要粘连）→ error', () => {
+    const glued = validateMemoryText(
+      '[2026-11-02 10:00] A 的正文（补充原有信息）[summary:B 的摘要]\n[2026-11-02 11:00] B 的正文\n')
+    const issue = glued.issues.find((item) => item.code === 'inline-tag')
+    assert.ok(issue, '应报 inline-tag')
+    assert.equal(issue.level, 'error')
+    assert.ok(issue.fix, '应给出修法')
+  })
+
+  it('行首标签是正常写法，不误报 inline-tag', () => {
+    const result = validateMemoryText('[summary:摘要]\n[2026-11-02 10:00] 正文\n§\n[2026-11-02 11:00] 另一条\n')
+    assert.ok(!result.issues.some((item) => item.code === 'inline-tag'))
+  })
+
+  it('时间戳与标签同行是合法写法，不误报 inline-tag', () => {
+    // 第一版修复脚本把这种形式也拆了一行（实测把 MEMORY.md 拆坏），回归守住。
+    const result = validateMemoryText('[2026-11-02 14:48] [summary:同行摘要]\n正文\n')
+    assert.ok(!result.issues.some((item) => item.code === 'inline-tag'))
+  })
+
   it('重复 id 报警（跨设备合并会指向错条目）', () => {
     const result = validateMemoryText('[id:abc] 甲\n§\n[id:abc] 乙')
     const issue = result.issues.find((item) => item.code === 'duplicate-id')
@@ -301,12 +323,14 @@ describe('插件的界面装配：路由是否真的注册到 webServer', () => 
     }
   }
 
-  it('走 ctx.inject 时注册 7 条路由', async () => {
+  it('走 ctx.inject 时注册全部路由', async () => {
     const routes = []
     const ctx = fakeCtx()
     ctx.inject = (deps, callback) => callback({ webServer: { register(route) { routes.push(route); return () => {} } }, effect(fn) { return fn() } })
     const { apply } = await import('../lib/index.js')
     apply(ctx, { memoryDir, coreDir })
+    // buildRoutes 共 17 个 method 级条目，其中 /switch /global /overview /entry /dev
+    // /devfile 六组同路径 GET/POST 合并成一条 exact 路由 → 11 条路径（见 api.js 的实测教训注释）。
     assert.equal(routes.length, 11, `应注册 11 条路由，实际 ${routes.length}`)
     assert.ok(routes.every((route) => route.path.startsWith('/api/memory-core/')))
     assert.ok(routes.some((route) => route.path === '/api/memory-core/state' && route.kind === 'exact'))

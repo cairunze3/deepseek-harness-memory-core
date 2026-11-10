@@ -3,11 +3,11 @@
 > A **zero-dependency memory core for AI agents** — resident indexing with a hard budget, entry-level BM25/hybrid retrieval, superseding edits, auditable consolidation, and cloud-tier classification. Ships as a plugin for VanWork (DeepSeek Harness), but the memory engine itself is host-agnostic.
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.4.1-blue">
+  <img alt="version" src="https://img.shields.io/badge/version-0.8.1-blue">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="node" src="https://img.shields.io/badge/node-%3E%3D22.5.0-brightgreen">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-0-red">
-  <img alt="tests" src="https://img.shields.io/badge/tests-286%20passed-green">
+  <img alt="tests" src="https://img.shields.io/badge/tests-476%20passed-green">
 </p>
 
 ## What problem this solves

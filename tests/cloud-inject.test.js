@@ -246,7 +246,9 @@ describe('inject · 选择与预算', () => {
     }))
     const rendered = renderIndexSnapshot({
       entries: many,
-      config: resolveConfig({ indexMaxLines: 120, indexMaxChars: 8000, indexTopN: 10 }),
+      // 本组守的是全量目录路径的契约；懒加载（lazyIndex 默认开）是另一条路径，
+      // 会在条目 > lazyMinEntries 时只注入核心段并把 omitted 置零。
+      config: resolveConfig({ indexMaxLines: 120, indexMaxChars: 8000, indexTopN: 10, lazyIndex: false }),
       now: Date.now(),
     })
     assert.equal(rendered.overflow, false, '有条目未入选 ≠ 溢出')
@@ -264,7 +266,7 @@ describe('inject · 选择与预算', () => {
       mtime: Date.now() - i * 1000,
       recencyKey: `2026-01-01T00:${String(i % 60).padStart(2, '0')}`,
     }))
-    const tight = resolveConfig({ indexMaxLines: 20, indexTopN: 60 })
+    const tight = resolveConfig({ indexMaxLines: 20, indexTopN: 60, lazyIndex: false })
     const rendered = renderIndexSnapshot({ entries: many, config: tight, now: Date.now() })
     assert.ok(rendered.lines <= 20, `行数应受控，实际 ${rendered.lines}`)
     assert.equal(rendered.overflow, true)
@@ -274,7 +276,7 @@ describe('inject · 选择与预算', () => {
 
   it('silent-trim 策略下不输出自修复指令（对照 Qoder 的做法）', () => {
     const many = Array.from({ length: 40 }, (_, i) => entry({ entryId: `s${i}`, summary: `条目 ${i}`, body: `条目 ${i}` }))
-    const rendered = renderIndexSnapshot({ entries: many, config: resolveConfig({ indexMaxLines: 12, indexTopN: 40, overflowPolicy: 'silent-trim' }), now: Date.now() })
+    const rendered = renderIndexSnapshot({ entries: many, config: resolveConfig({ indexMaxLines: 12, indexTopN: 40, overflowPolicy: 'silent-trim', lazyIndex: false }), now: Date.now() })
     assert.equal(rendered.overflow, true)
     assert.ok(!rendered.text.includes('ACTION REQUIRED'))
     assert.ok(rendered.text.includes('mem_consolidate'))

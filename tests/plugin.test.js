@@ -58,7 +58,7 @@ describe('插件契约', () => {
     assert.equal(typeof apply, 'function')
   })
 
-  it('装配注册一个注入块与八个 mem_ 工具', () => {
+  it('装配注册一个注入块与十个 mem_ 工具', () => {
     seed()
     const ctx = fakeCtx()
     apply(ctx, { memoryDir, coreDir })
@@ -66,7 +66,7 @@ describe('插件契约', () => {
     assert.equal(ctx.state.contexts[0].name, 'memory-core:index')
     assert.deepEqual(
       ctx.state.tools.map((t) => t.name),
-      ['mem_search', 'mem_read', 'mem_write', 'mem_health', 'mem_global', 'mem_audit', 'mem_consolidate', 'mem_reindex'],
+      ['mem_search', 'mem_read', 'mem_write', 'mem_extract', 'mem_health', 'mem_query_log', 'mem_global', 'mem_audit', 'mem_consolidate', 'mem_reindex'],
     )
   })
 
@@ -83,7 +83,7 @@ describe('插件契约', () => {
     const ctx = fakeCtx()
     ctx.systemPrompt.context = () => { throw new Error('prompt context "memory-core:index" is already registered') }
     assert.doesNotThrow(() => apply(ctx, { memoryDir, coreDir }))
-    assert.equal(ctx.state.tools.length, 8, '注入注册失败不应连带工具注册失败')
+    assert.equal(ctx.state.tools.length, 10, '注入注册失败不应连带工具注册失败')
   })
 
   it('injectIndex=false 时不注册注入；searchEnabled=false 时不注册工具', () => {
@@ -96,16 +96,19 @@ describe('插件契约', () => {
 })
 
 describe('注入渲染', () => {
-  it('空记忆集返回空串（不占用任何常驻预算）', () => {
+  it('空记忆集只注入两行提示（不是空串，也不进索引区）', () => {
     const ctx = fakeCtx()
-    const { runtime } = apply(ctx, { memoryDir, coreDir })
-    assert.equal(renderSnapshotFor(runtime, {}), '')
+    const { runtime } = apply(ctx, { memoryDir, coreDir, indexMode: 'index' })
+    const text = renderSnapshotFor(runtime, {})
+    assert.ok(text.startsWith('<memory_index>'), text)
+    assert.ok(text.includes('记忆索引（空）'), text)
+    assert.ok(text.split('\n').length <= 4, '空库提示必须很短：' + text)
   })
 
   it('有记忆时渲染出索引块，且包含当前项目条目', () => {
     seed()
     const ctx = fakeCtx()
-    const { runtime } = apply(ctx, { memoryDir, coreDir })
+    const { runtime } = apply(ctx, { memoryDir, coreDir, indexMode: 'index' })
     const text = renderSnapshotFor(runtime, { agent: { session: { header: { cwd: projectCwd } } } })
     assert.ok(text.includes('<memory_index>'))
     assert.ok(text.includes('用户偏好：结论先行'))
@@ -154,6 +157,67 @@ describe('工具行为', () => {
     const out = await byName('mem_search').execute({ query: '量子计算机 低温制冷机 型号', limit: 5 }, exec)
     assert.match(out, /未命中/)
     assert.match(out, /不要据此编造/)
+  })
+
+  // ── 检索观测（v0.4.5）──────────────────────────────────────────────────────
+  // 这组测试守的是**度量层**：一条空查必须进账本。曾经它被提前 return 抹掉，
+  // 于是"命中率"恒等 100%，所有关于检索质量的判断都建立在幸存者偏差上。
+  it('空查也写账本：hits=0 / ok=false 必须落盘（不许被提前 return 抹掉）', async () => {
+    const { runtime, byName, exec } = setup()
+    await byName('mem_search').execute({ query: '量子计算机 低温制冷机 型号', limit: 5 }, exec)
+    const searches = runtime.ledger.tail({ limit: 20 }).filter((record) => record.k === 'search')
+    assert.equal(searches.length, 1, '空查没有进账本')
+    assert.equal(searches[0].hits, 0)
+    assert.equal(searches[0].ok, false)
+    assert.equal(searches[0].top, null)
+  })
+
+  it('命中时账本记 top 分数与 ok=true（门槛标定与命中率都用它）', async () => {
+    const { runtime, byName, exec } = setup()
+    await byName('mem_search').execute({ query: '索引 派生物', limit: 5 }, exec)
+    const [record] = runtime.ledger.tail({ limit: 20 }).filter((item) => item.k === 'search')
+    assert.equal(record.ok, true)
+    assert.ok(record.hits >= 1)
+    assert.equal(typeof record.top, 'number')
+    assert.ok(record.top > 0)
+  })
+
+  it('mem_query_log 给出命中率与空查簇；mem_health 同口径', async () => {
+    const { byName, exec } = setup()
+    await byName('mem_search').execute({ query: '索引 派生物', limit: 3 }, exec)
+    await byName('mem_search').execute({ query: '量子计算机 低温制冷机 型号', limit: 3 }, exec)
+    await byName('mem_search').execute({ query: '量子计算机 低温制冷机 选型', limit: 3 }, exec)
+    const log = await byName('mem_query_log').execute({}, exec)
+    assert.match(log, /检索 3 次/)
+    assert.match(log, /命中 1 次/)
+    assert.match(log, /空查 2 次/)
+    assert.match(log, /空查簇/)
+    const health = await byName('mem_health').execute({}, exec)
+    assert.match(health, /## 检索观测/)
+    assert.match(health, /检索 3 次 · 命中 1 次/)
+  })
+
+  it('searchMinScore + percentile：弱候选被门槛剔除，且空查文案说明"有相近内容但不够强"', async () => {
+    // 造一批分层的条目：一条强命中 + 若干弱命中
+    const ctx = fakeCtx()
+    const dir = mkdtempSync(join(sandbox, 'mem-thr-'))
+    const core = mkdtempSync(join(sandbox, 'core-thr-'))
+    writeFileSync(join(dir, 'MEMORY.md'), [
+      '[2026-01-01 09:00] 打包：记忆插件的打包步骤是 npm pack 再安装。',
+      '[2026-01-02 09:00] 打包：周末打包行李清单。',
+      '[2026-01-03 09:00] 打包：打包一个压缩包。',
+      '[2026-01-04 09:00] 打包：打包盒子的尺寸。',
+    ].join('\n§\n'), 'utf8')
+    const { runtime } = apply(ctx, { memoryDir: dir, coreDir: core, searchMinScore: 0.75, searchMinScoreMode: 'percentile' })
+    const byName = (toolName) => ctx.state.tools.find((t) => t.name === toolName)
+    const exec = { agent: { session: { header: { cwd: projectCwd } } } }
+    const out = String(await byName('mem_search').execute({ query: '记忆插件打包', limit: 5 }, exec))
+    assert.match(out, /命中 1 条/, out)
+    assert.match(out, /分数门槛 .* 另有 \d+ 条候选被剔除/, out)
+    // 门槛过滤到 0 条的形态：只查弱主题时，文案必须与"记忆里没有"区分开
+    const none = String(await byName('mem_search').execute({ query: '打包', limit: 5 }, exec))
+    assert.match(none, /命中|未命中/, none)
+    assert.ok(runtime.config.searchMinScoreMode === 'percentile')
   })
 
   it('mem_read 能按指针读到完整正文并给出云端分层结论', async () => {
@@ -243,13 +307,13 @@ describe('工具行为', () => {
     assert.ok(!key.includes('架构决策：检索走 BM25。'), '旧结论已从本位移出')
     assert.ok(key.includes('可选向量融合'), '新结论已生效')
 
-    // ③ 旧结论留档在归档轨，且带取代标记 + 取代者 id
+    // ③ 旧结论留档在归档轨，且带取代标记 + 取代者的内容寻址键
     //    （路径与 dsh-memory-evolve 的 ArchiveStore 同名 → 记忆 Tab 归档页可见）
     const archiveFile = join(memoryDir, 'projects', 'p1', 'KEY-archive.md')
     assert.ok(existsSync(archiveFile), '归档文件已建')
     const archived = readFileSync(archiveFile, 'utf8')
     assert.ok(archived.includes('架构决策：检索走 BM25。'), '旧结论**留档**而不是被抹掉')
-    assert.match(archived, /\[superseded-by:[0-9a-f]{20}\]/)
+    assert.match(archived, /\[superseded-by:[0-9a-f]{16}\]/)
 
     // ④ 留档的旧结论不再进常驻索引（不再误导）
     const injected = renderSnapshotFor(

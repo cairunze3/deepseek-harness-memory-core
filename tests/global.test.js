@@ -138,17 +138,24 @@ describe('接口：读 / 手改 / 槽位合并', () => {
   }
   const find = (routes, path, method) => routes.find((r) => r.path === path && r.method === method)
 
-  it('没有文件时返回空槽（不是报错）', async () => {
+  /** 读现状（2026-11-04 起 GLOBAL.md 默认预建，手改的 base 必须取自这里）。 */
+  async function readGlobal(routes) {
+    return (await call(find(routes, '/api/memory-core/global', 'GET'))).payload
+  }
+
+  it('预建的 GLOBAL.md 只有说明、没有槽（说明注释不算槽）', async () => {
     const routes = buildRoutes(runtimeOf())
-    const state = await call(find(routes, '/api/memory-core/global', 'GET'))
-    assert.equal(state.payload.ok, true)
-    assert.equal(state.payload.exists, false)
-    assert.deepEqual(state.payload.slots, [])
+    const state = await readGlobal(routes)
+    assert.equal(state.ok, true)
+    assert.equal(state.exists, true, '默认预建（precreateFiles 默认开）')
+    assert.deepEqual(state.slots, [], '文件头说明与 `# 记忆` 都不算槽')
+    assert.match(state.text, /<!--/, '预建文件带功能说明注释')
   })
 
   it('POST content 手改 → 落盘 GLOBAL.md + 记修订', async () => {
     const routes = buildRoutes(runtimeOf())
-    const saved = await call(find(routes, '/api/memory-core/global', 'POST'), { body: { base: '', content: sample } })
+    const base = (await readGlobal(routes)).text
+    const saved = await call(find(routes, '/api/memory-core/global', 'POST'), { body: { base, content: sample } })
     assert.equal(saved.status, 200, JSON.stringify(saved.payload))
     assert.equal(saved.payload.slots, 2)
     assert.match(readFileSync(join(memoryDir, GLOBAL_REL), 'utf8'), /蔡润泽/)
@@ -156,7 +163,7 @@ describe('接口：读 / 手改 / 槽位合并', () => {
 
   it('POST ops 合并 → 只动指定的槽', async () => {
     const routes = buildRoutes(runtimeOf())
-    await call(find(routes, '/api/memory-core/global', 'POST'), { body: { base: '', content: sample } })
+    await call(find(routes, '/api/memory-core/global', 'POST'), { body: { base: (await readGlobal(routes)).text, content: sample } })
     const merged = await call(find(routes, '/api/memory-core/global', 'POST'), {
       body: { base: null, ops: [{ op: 'set', name: '当前持仓', value: '空仓约 1 万' }] },
     })
@@ -170,7 +177,7 @@ describe('接口：读 / 手改 / 槽位合并', () => {
 
   it('base 过期 → 409，且文件不被覆盖（保住用户手改）', async () => {
     const routes = buildRoutes(runtimeOf())
-    await call(find(routes, '/api/memory-core/global', 'POST'), { body: { base: '', content: sample } })
+    await call(find(routes, '/api/memory-core/global', 'POST'), { body: { base: (await readGlobal(routes)).text, content: sample } })
     const conflict = await call(find(routes, '/api/memory-core/global', 'POST'), { body: { base: '过期的旧内容', content: '我的新版' } })
     assert.equal(conflict.status, 409)
     assert.match(readFileSync(join(memoryDir, GLOBAL_REL), 'utf8'), /蔡润泽/, '原内容不能被冲掉')
@@ -178,7 +185,7 @@ describe('接口：读 / 手改 / 槽位合并', () => {
 
   it('ops 与现状一致 → changed:false（不写盘、不留无意义修订）', async () => {
     const routes = buildRoutes(runtimeOf())
-    await call(find(routes, '/api/memory-core/global', 'POST'), { body: { base: '', content: sample } })
+    await call(find(routes, '/api/memory-core/global', 'POST'), { body: { base: (await readGlobal(routes)).text, content: sample } })
     const noop = await call(find(routes, '/api/memory-core/global', 'POST'), {
       body: { base: null, ops: [{ op: 'set', name: '身份', value: '蔡润泽，深圳，简体中文。' }] },
     })

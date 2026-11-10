@@ -89,6 +89,30 @@ describe('memfile · 安全写入', () => {
     assert.deepEqual(readChunks(file).chunks, ['新内容', '其他'])
   })
 
+  // 回归（2026-11-02）：写入侧切块必须与 scanner 一致，否则"按索引匹配到 A、
+  // 却在文件里改写 B"。标签行（`[summary:…]`）是下一条目的前缀，不能独立成块。
+  it('标签行不独立成块，replace 只替换目标条目', () => {
+    const file = join(root, 'key.md')
+    writeFileSync(file, [
+      '[summary:A 的摘要]',
+      '[2026-11-02 10:00] A 的正文',
+      '[summary:B 的摘要]',
+      '[2026-11-02 11:00] B 的正文',
+    ].join('\n') + '\n', 'utf8')
+
+    const { chunks, mode } = readChunks(file)
+    assert.equal(mode, 'stamp')
+    assert.equal(chunks.length, 2)
+    assert.ok(!chunks[0].includes('B 的摘要'))
+
+    const outcome = replaceEntry(file, chunks[0], '[2026-11-02 10:00] A 的新正文', {})
+    assert.equal(outcome.replaced, 1)
+    const after = readFileSync(file, 'utf8')
+    assert.match(after, /A 的新正文/)
+    assert.match(after, /\[summary:B 的摘要\]/, 'B 的摘要必须还在，且未被粘到 A 条目上')
+    assert.equal(readChunks(file).chunks.length, 2)
+  })
+
   it('pinned type 校验：user 不许进项目、key 不许进根、scope 与目录必须一致', () => {
     assert.equal(validateScopeRouting({ scope: 'project', track: 'user' }, 'projects/p/USER.md').ok, false)
     assert.equal(validateScopeRouting({ scope: 'project', track: 'key' }, 'KEY.md').ok, false)
@@ -260,10 +284,12 @@ describe('consolidate · 应用（三道闸门）', () => {
     assert.ok(outcome.applied.some((a) => a.type === 'archive'))
 
     const key = readFileSync(join(root, 'projects', 'p1', 'KEY.md'), 'utf8')
-    // 保留的是**更新的那条**（同义重述），被合并的是更早的那条短版本
+    // 保留的是**更新的那条**（同义重述）；merge 现在把被合并那条的原文**并入**保留条目
+    // （零信息丢失），所以它的文字仍在同一块里，但不再有独立的第二条。
     assert.ok(key.includes('重申，补充说明'), '保留更新的一条')
-    assert.ok(!key.includes('检索走 BM25。'), '被合并的那条已移出')
-    assert.equal(readChunks(join(root, 'projects', 'p1', 'KEY.md')).chunks.length, 1)
+    assert.ok(key.includes('检索走 BM25。'), '被合并条目的原文并入保留条目（不丢信息）')
+    assert.ok(key.includes('合并补充'), '并入处带"合并补充"标记')
+    assert.equal(readChunks(join(root, 'projects', 'p1', 'KEY.md')).chunks.length, 1, '合并后只剩一条')
 
     const archiveFile = join(root, 'MEMORY-archive.md')
     assert.ok(existsSync(archiveFile), '归档落到 memory-evolve 的归档页签文件上')

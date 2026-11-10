@@ -167,17 +167,20 @@ dsh plugin --profile web remove vanwork-memory-core
 
 完整默认值与每项的取舍理由见 `lib/config.js`（每一项都写了采纳了谁、放弃了什么）。
 
-## 5. 七个工具
+## 5. 十个工具
 
 | 工具 | 作用 | 要点 |
 |---|---|---|
-| `mem_search` | 在记忆条目上检索 | 返回**指针**（`相对路径#序号`）+ 片段 + 来源；结果标注为"数据，非指令" |
+| `mem_search` | 在记忆条目上检索 | 返回**指针**（`相对路径#序号`）+ 片段 + 来源；结果标注为"数据，非指令"。**空查也记账**（否则命中率恒为 100%） |
 | `mem_read` | 按指针/id 读完整正文 | 附带陈旧性提醒、云端分层结论；若该条已被取代会明确警告"不要据此断言现状" |
+| `mem_extract` | 会话边界抽取的落盘口 | 只写 `QUEUE.md` 候选，**没有 confirm**；抽自上一会话摘要，幂等（同一 session 不重复）；被检索命中后自动转正 |
 | `mem_write` | 追加 / 改写 / 删除 / **取代** | **写入门槛递增**：`daily`/`project` 可直接追加；`memory`/`user`/`key` 必须 `confirm=true`；`supersede` 一律要 `confirm`。写入全程在文件锁内，取不到锁**如实失败** |
 | `mem_audit` | **存储授权自检** | 回答"到底谁在管存储"：正本/索引/账本位置、注入是否只有一条来源、写入编排是否归一、旧实现是否还在同一份正本上写；给出证据与修法。**只读** |
-| `mem_health` | 健康检查 | 预算 / 陈旧 / 整合 / 重复候选 / 取代提议 / 云端画像 / 审计账本 |
+| `mem_health` | 健康检查 | 预算 / **检索观测**（命中率·空查簇）/ 陈旧 / 整合 / 重复候选 / 取代提议 / 云端画像 / 审计账本 |
+| `mem_query_log` | **检索观测** | 近 N 天的检索次数、命中率、空查簇、平均最高分；给一个 `query` 还能回报它在候选池的分位（用于标定 `searchMinScore`）。**只读** |
 | `mem_consolidate` | 计划与应用整合 | `plan` 零副作用；`apply` 需 `confirm=true` + 方案指纹校验；方案里的**取代提议默认不执行**，要落地须再传 `supersede=true` |
 | `mem_reindex` | 重建索引 | 索引是派生物，重建永远安全 |
+| `mem_global` | 全局记忆槽位 | `GLOBAL.md` 的 8 槽模型：槽间叠加、槽内重写、槽数封顶 |
 
 `mem_audit` 的输出形状（本机实测，2026-10-27）：
 
@@ -477,7 +480,7 @@ Remove-Item Env:DSH_HOME
 | 概览 | 条目数 / 文件数 / 可疑数 / 注入预算（`indexTopN` · `indexMaxChars`） |
 | 列表 | 按轨道筛选、只看可疑、按摘要/指针搜索 |
 | 编辑 | 载入单条全文 → 改 → 保存（**走锁 + 改前备份 + 修订记录**） |
-| 格式体检 | 一键检查结构问题（缺 `§` / 标签未闭合 / 空条目 / 重复 id） |
+| 格式体检 | 一键检查结构问题（缺 `§` / 标签未闭合 / 空条目 / 重复 id / 标签粘连正文） |
 | 修订记录 | 最近 15 条"谁把哪条从什么改成什么" |
 | 核实 | 清掉某条的可疑标记 |
 
@@ -496,7 +499,8 @@ POST /api/memory-core/verify      清可疑标记
 **"改得安全"三件套**：
 
 1. **格式体检**（`lib/validate.js`）：手改最常见的破坏是漏 `§`——那不是难看，而是**两条并成一条**。
-   检查 `broken-delimiter` / `unclosed-tag` / `empty-entry` / `leading|trailing-delimiter` / `duplicate-id`，
+   检查 `broken-delimiter` / `unclosed-tag` / `empty-entry` / `leading|trailing-delimiter` / `duplicate-id`
+   / `inline-tag`（标签不在行首，即上面这种"并成一条"的留痕），
    每条都带"怎么修"。批量版（`validateFiles`）给界面与体检报告用。
 2. **乐观并发**：保存时把**"你载入的那份正文"**一起提交；宿主用 `replaceEntry(file, base, content)` ——
    它在**锁内重读**之后才做精确匹配，期间别人改过就匹配不上 → 返回 **409**，绝不覆盖。
@@ -558,13 +562,295 @@ POST /api/memory-core/verify      清可疑标记
 - 编辑框移到**列表上方**（紧跟概览），保存 / 放弃 / 关闭同一行；
 - 概览有自己的编辑框与「重新生成 / 保存 / 放弃 / 重新载入」。
 
+### 8.10 运行时总开关：设置页一键停用（v0.4.2）
+
+**问题**：想让记忆「歇一会儿」（比如嫌简单闲聊也带索引、或排查问题时想要干净上下文），
+只能去改 profile 并重启——太重。
+
+**做法**：设置页「记忆管理」面板顶部加了一个「启用记忆」开关。状态落在
+`<coreDir>/switch.json`（`{ "enabled": false }`），**不是 profile 配置**——
+所以点了立刻生效，不用重启：
+
+| 停用后 | 行为 |
+|---|---|
+| 常驻索引注入 | 一行都不注入（`renderSnapshotFor` 直接返回 `''`，零上下文成本，也不做轮次记账） |
+| `mem_*` 工具 | 仍出现在工具表里（注册是启动期静态的），但每次调用直接返回一行停用说明，不读不写任何文件 |
+| 记忆文件 / 索引 / 账本 | **原样保留**，不删不改；重新打开开关即恢复 |
+| 管理面板本身 | 照常可用（否则没法再打开） |
+
+三条纪律：
+1. **缺文件 = 启用**：开关文件读不到/损坏也按启用处理——开关坏掉不该把记忆整个锁死；
+   想强制恢复，删掉 `<coreDir>/switch.json` 即可。
+2. **跨进程可见**：每次判定只 `stat` 一下 mtime、变了才重读——web 端点的开关，
+   别的会话/上下文下一次渲染就能看到，同时热路径只花一次 statSync。
+3. **GUI 编辑不受开关影响**：「修改记忆」走的是管理闸门（锁/备份/修订），不是 `mem_*` 工具面。
+
+接口：`GET /api/memory-core/switch`（读状态）、`POST /api/memory-core/switch`
+（`{ "enabled": boolean }`，原子写 + 记账）；`/state` 的返回里也带 `enabled`。
+
+### 8.11 路由注册的真坑：同路径 GET/POST 必须合并（v0.4.3）
+
+**症状**：设置页面板整组 404，desktop.log 里一行
+`管理接口注册失败：webserver: duplicate exact route "..."`。
+
+**根因（2026-11-02 用日志钉死）**：宿主的 exact 路由表**按路径判重、不含 HTTP
+方法**。`buildRoutes` 里 GET 与 POST 是两条路由，同路径的第二条一注册就抛
+duplicate，而且 `mountUi` 的 try/catch 包住的是**整个** `registerRoutes`——
+抛错时后面所有路由都没注册。历史日志完全吻合：每天报的都是当时最新的
+"GET+POST 同路径"路由（10-28 `/entry` → `/overview`，之后 `/global`，
+11-02 `/switch`）。
+
+**连带发现的存量 bug**：0.4.0 / 0.4.1 时代 `POST /global`（「更新记忆」的保存）
+**从未注册成功过**——面板显示 GLOBAL.md 一直正常（GET 注册到了），但保存必然
+404。此前把"能看不能编辑"归因于按钮位置，只对了一半。
+
+**修法**：`registerRoutes` 按**路径**聚合，同路径的 GET/POST 合并成一个 exact
+路由，handler 内按 `req.method` 分发（GET 允许 HEAD 探测，其余 405）。
+`buildRoutes` 不变（单测仍按方法驱动）。验证：`tests/switch.test.js` 新增
+3 例（路径唯一、按方法分发、405）。
+
+### 8.12 时间戳模式的切块边界：摘要行是条目前缀，不是正文（v0.4.4）
+
+**症状**：`KEY.md` 里同一条的 `[summary:…]` 出现两次；正文行尾直接粘着另一条摘要、
+中间没有换行。功能上"读得出来"，但索引里条目 A 的正文**包含了条目 B 的摘要**。
+
+**根因（2026-11-02 用真实文件钉死）**：`buildBody` 把 `[summary:…]` 放在时间戳
+**之前**、独占一行；而 `STAMP_RE` 只认时间戳行。于是逐行扫描时：
+
+- 遇到 `[summary:A]` → 不是边界，进 buffer；
+- 遇到 `[2026-11-02 …] body1` → 是边界 → **把 summary 单独切成一条**；
+- 遇到 `[summary:B]` → 进 buffer，粘在 body1 尾部（缺换行由此而来）。
+
+**为什么模型会把结构写坏**：`mem_read` 读的是正本（没坏），坏的是派生索引
+`KEY.md`——恰好是模型定位条目时看的那一份。索引里 A 的正文带着 B 的摘要，
+模型拿这段正文当 `match` 去 `replace`，工具侧 `hits.length === 1`，认为匹配
+唯一且正确，于是一刀切在了标签行上。**工具缺护栏只是放大器，不是根因**——
+先修切块，护栏才有意义。
+
+**修法（四处必须同步，否则索引与写盘错位）**：
+
+1. `scanner.splitIntoEntries`：切分点从"时间戳行"改为"
+   **尾部连续标签行 + 时间戳行**"——把 buffer 末尾的纯标签行留（cut）给下一条，
+   只把前面的正文切出去。
+2. `memfile.readChunks` 的 stamp 分支：用**同一套判定**（`isTagOnlyLine` 由
+   `scanner.js` 导出，两处共用）。两处不一致的代价是"索引里的条目"和
+   "写盘时切出来的条目"对不上 → `replace` 按索引匹配到 A、却在文件里改写 B。
+3. `lib/tools.js`：`replace` / `supersede` 拒绝 `match` 为纯标签行；
+   `content` 含行内标签直接拒绝。
+4. `lib/validate.js`：新增 `inline-tag`（标签不在行首 = "两条被粘成一条"的留痕）。
+
+**踩过的两个坑**（都是实测打回来的，不是推理出来的）：
+
+- "遇到时间戳时判断 buffer 是否全为标签"——**错的**。那时标签行已经和正文混在
+  同一 buffer 里，判断必然失败（当场 2 个用例变红）。正确做法是把尾部标签行
+  **cut** 出来，而不是判断。
+- `[2026-11-02 14:48] [summary:…]`（时间戳与标签**同行**）是**合法**写法。
+  行内标签的判定必须是"前一个**非空白**字符不是 `]`"，写成 `[^\]\n\r]` 不行——
+  `[ \t]*` 之前的空格自身会被当成前一个字符，结果把合法写法也拆开（实测拆坏
+  `MEMORY.md`）。
+
+**历史数据修复**：`npm run repair:tags`（`scripts/repair-inline-tags.mjs`）
+默认 dry-run，`--apply` 才写；拆行 + 去重、改前备份、改后复验、**幂等**。
+它只修结构不管语义——摘要内容被改错的条目仍需人工或 `mem_write` 校正。
+
+**验证**：304 个用例全绿；真实损坏文件修复前两侧各 3 chunk 且**一致地错**，
+修复后各 2 chunk 且正确。
+
+### 8.13 开发者模式：全部记忆 md 可看可改（v0.6.0）
+
+**问题**：面板只认 `GLOBAL.md` 一份（8.9 的取舍）。但真出问题时（条目结构怪、
+`KEY.md` 里两条粘在一起、`daily` 里写错日期），用户只能去文件管理器里翻
+`~/.dsh/memories/`——而且**翻到了也不敢改**：不知道哪个文件每轮都注入、
+哪个改了下一次就被覆盖。
+
+**做法**：设置页「记忆管理」加第二个开关「开发者模式」，打开后把记忆根下
+**全部 `.md`** 列出来，每行带一句话说明"它是干什么的"+ 注入信号灯，点开即
+整份查看/编辑。开关状态落 `<coreDir>/devmode.json`（与 8.10 同机制，同样是
+点一下立刻生效、跨进程可见）。
+
+五个信号灯（`lib/devfiles.js` 的 `INJECT_KINDS`）：
+
+| 信号 | 含义 | 典型文件 |
+|---|---|---|
+| 🟢 常驻注入 | 每轮都花上下文预算，改它等于改模型的默认认知 | `GLOBAL.md`、`USER.md`、`projects/*/KEY.md` |
+| 🔵 按需检索 | 只进索引，命中才出现 | `MEMORY.md`、`projects/*/MEMORY.md`、`daily/*`、`DIGEST.md` |
+| ⚪ 仅留档 | 永不注入，只供追溯（遗忘 = 归档） | `archive/*`、`*-archive.md`、`daily/archive/*` |
+| 🟡 派生物 | 改了不改原文，下次生成即覆盖 | `OVERVIEW.md` |
+| 🟠 待确认候选 | 不进注入，等被检索命中或人工晋升 | `QUEUE.md` |
+
+**安全默认**（这是本功能最重要的部分）：
+
+1. **缺文件 = 关闭**：升级不会给任何人悄悄装上一个"可写全盘记忆"的入口；
+   想开必须显式勾选。损坏的开关文件也按关闭处理。
+2. **关闭时后端一律 403**：`/devfile` 的读与写都拒绝，界面拿到的 `files` 是空数组
+   （只给 `count` 一个数字）。不是前端藏按钮，是后端不给。
+3. **只开放 Markdown**：`.db` / `.jsonl` / `switch.json` 一律 400——索引与账本是
+   派生物，改它们只会制造不一致。
+4. **路径守卫**：必须落在记忆根内（`guardPath`），`../` 逃逸直接 400。
+5. **整份替换必须带 `base`**：没有 `base` 一律 400（拒绝盲写）；`base` 与磁盘当前
+   内容不逐字节相同 → 409。这与「条目级编辑」的乐观并发是同一套纪律，只是把
+   "匹配一条"换成"匹配整份"。
+6. **写入仍走三件套**：改前备份到 `<coreDir>/backups/<date>/`、原子写、记一条修订，
+   并立刻 `invalidate` 索引槽（下一轮注入就能看到新内容）。
+
+**它与总开关的关系**：两个开关**互不依赖**。停用记忆 + 开启开发者模式 =
+"能翻能改，但不进上下文"（排查记忆质量时的理想状态）；反之则只有 `GLOBAL.md`
+可编辑。
+
+接口：`GET/POST /api/memory-core/dev`、`GET/POST /api/memory-core/devfile`
+（详见 `lib/api.js` 顶部契约）。**验证**：`tests/dev.test.js` 18 例
+（默认关闭 / 关闭时 403 / 清单完整性 / 每个文件都有说明 / 角色判定 /
+读写往返 / 409 并发 / 400 越界 / 新建文件 / 关掉立刻恢复拒绝）；全量 412 例全绿。
+
+### 8.14 预建全部记忆文件 + 文件头说明（v0.6.1）
+
+**问题**：记忆根是"用得多了才长出文件"。新装或闲置几天后打开 `~/.dsh/memories/`，
+只看到几个文件，看不出"这套记忆本来有哪些轨、各管什么"；`QUEUE.md` 与 `MEMORY.md`
+长得一样"像记忆"，实际一个**不进注入**、一个进；`OVERVIEW.md` 更是改了也不生效。
+
+**做法**：`precreateFiles`（**默认开**）在插件装载时幂等补齐应有文件：
+
+| 范围 | 预建 | 不预建（派生物） |
+|---|---|---|
+| 根目录 | `GLOBAL.md`、`USER.md`、`MEMORY.md`、`QUEUE.md`、`daily/<今天>` | `OVERVIEW.md`、`DIGEST.md`、`*-archive.md`、`archive/*` |
+| 已存在的项目目录 | `MEMORY.md`、`KEY.md`、`daily/<今天>` | `DIGEST.md` |
+
+三条纪律：
+
+1. **只写不存在的路径**：已有文件一个字节都不动（`ensureRootLayout` 里每个 `put` 都先 `existsSync`）；
+2. **派生物不预建**：`OVERVIEW.md` 一旦预建，`overviewState` 的 `text === ''` 判据就失效
+   （面板会直接显示注释而不是自动生成）；`DIGEST` / 归档空文件则会让"有没有归档"这类判据失真。
+   它们在开发者模式清单里仍以「未创建」出现；
+3. **项目目录只在已存在时补齐**：不凭 cwd 猜项目身份新建目录（猜错就是垃圾目录）。
+   打开管理面板时会再补齐一次（`rt.ensureLayout`），所以跨天不用重启也能看到当天的 daily。
+
+**每个文件头部带一句功能说明**（`filedocs.headerNote`），长这样：
+
+```md
+<!-- 记忆文件说明（本注释不算记忆内容，可删；删了不影响功能）
+MEMORY.md · 全局事实 · 🔵 按需检索
+作用：跨项目通用的长期事实与约定（按 § 分条的条目流）。进索引，按相关度被检索或注入。
+注意：与 GLOBAL.md 的区别：这里是"全量事实库"，GLOBAL 是"挑出来的那一屏"。
+-->
+```
+
+**这带来一个必须同时解决的问题：说明注释会被当成一条记忆。** 实测存量 `GLOBAL.md`
+的第一条就是 `# 记忆` + 注释块（`track=global`，进常驻注入池，白占预算）——
+原来 `ensureRootLayout` 刻意写 0 字节空文件，注释里写的正是"说明性注释会被解析成一个假条目"。
+
+修法是给这类内容一个明确身份：**文件头 = 页眉，不是条目**。
+
+| 层 | 改动 |
+|---|---|
+| `scanner.splitHeaderComments` | 剥出"开头注释块 + 紧随的一级标题"（`# 记忆`）；**新增旧格式兼容**：`# 标题` 在前、注释紧随其后也算页眉——存量文件一个字节都不用改 |
+| `scanner.splitIntoEntries` | 先剥页眉再按 `§` / 时间戳 / 标题切；`isTitleOnlyBlock` **只认一级标题**（`## 待办` 这类分节即使空着也保留，绝不因为"像标题"丢用户内容） |
+| `memfile.readChunks` / `joinChunks` | 同样剥页眉、写回时原样拼在最前；`chunks` 用同一份 `isTitleOnlyBlock` 过滤（8.12 的教训：读写两侧必须同一判定） |
+| `global.renderSlots` | 注释移到 `# 记忆` **之前**，"更新于"也挪进页眉（原来粘在最后一个槽的正文里） |
+
+效果（真实数据）：`GLOBAL.md` 从 9 条降到 8 条，第一条从 `# 记忆 …` 变成真正的槽
+`## 身份`；带说明的空文件仍然是 **0 条目**；`append` 后说明只出现一次、留在最前。
+
+**开发者模式同步升级**：清单里加"应该有但还没有"的占位行（虚线框，点一下即新建），
+排序改为**先按目录分组、再按角色**（否则 `projects/<id>/` 会被别的组隔开，
+界面会出现两个同名分组标题）。
+
+> ⚠️ **与 `dsh-memory-evolve` 共存时注意**：对方解析记忆文件时不做页眉剥离，
+> 会把文件头说明当成"第一条记忆"的正文。本机 profile 已不装载它；若以后要切回去，
+> 请把 `precreateFiles` 设为 `false`（只影响新建文件；已有文件里的说明需手工删）。
+
+### 8.15 先流水、后结论：让 daily 真的被写（v0.6.2）
+
+**问题（用户提问引出，账本可证）**：`GLOBAL.md` / `USER.md` 一周没动是正常的（慢变轨），
+但**根 `daily/` 从 10-29 起断档 7 天、根 `MEMORY.md` 从未建立**就不正常了。账本给出根因：
+
+```
+11-03 起：extract → queue  ×8   （会话边界抽取，按设计只进 QUEUE.md）
+11-04   ：add     → key    ×1   （直接写项目结论）
+全程     ：add     → daily  ×0   ← 一次都没有
+```
+
+不是写入故障，是**写入类型变了**：v0.5.x 的写入纪律只说"落正轨"，而模型把"正轨"
+读成 KEY/MEMORY 这类结论轨——流水轨被整条跳过。后果是"结论都在，但'当时试过什么、
+排除了什么'永久丢失"，事后既没法复盘，也没法从流水里重新蒸馏结论。
+
+**做法（三层，缺一层就退化成概率游戏）**：
+
+| 层 | 内容 |
+|---|---|
+| 纪律文本 | `inject.renderWriteRules()` **单一来源**，索引模式与按需检索模式共用同一份（原来两处各写一份、措辞已漂移）。两段写成两个显式步骤 + 点名"别跳过它只写结论"这个具体失败模式 |
+| 空库首屏 | `【先写后答】`（仅空库时出现）也改成"先 daily 流水、再结论"——空库是模型最容易照着塑形的时刻 |
+| 确定性兜底 | 写结论（`user`/`memory`/`key`）落到正轨时，若**当天该 scope 还没有任何 daily 条目**，`mem_write` 的返回值追加一行：`（今天还没有 daily 流水：先用 … track="daily" … 补一条）`。提示词是概率性的，这一行是确定的，且只在缺口存在时出现（稳态零成本） |
+
+**为什么不自动补写流水**：那会让 daily 变成"结论的回声"，"试过什么"仍然是空的——
+流水唯一的价值就是记录**当时的路径**，事后由结论反推出来的东西不算证据。
+
+**两段的门槛必须不同**（否则不叫两段）：`daily` / `project` 免 confirm 直接追加
+（`NEEDS_CONFIRM` 只含 `user`/`memory`/`key`），结论轨要 `confirm=true` 才直写正轨、
+否则进 `QUEUE.md` 候选。所以第一步没有任何"要不要用户点头"的摩擦，纯靠提示词就能落地。
+
+**配置**：`dailyFirstWrite`（**默认开**）。关掉 = 回退 v0.5.x 措辞，同时兜底提醒也不出现
+（提示词与工具行为必须同步回退，否则会出现"提示词不说、工具却催"的分裂感）。
+
+**代价（实测字符数，已尽量收紧）**：
+
+| 注入模式 | 改前 | 改后 | 增 |
+|---|---|---|---|
+| `pointer`（默认） | 575 | 949 | +374 ≈ 120 token/轮（恒定） |
+| `index`（空库） | 884 | 1121 | +237 |
+
+之所以接受：这 120 token 买的是"事后能复盘"，而丢掉的流水**不可再生**。
+纪律文本压到 637 字符（原索引模式那一份约 700），靠合并重复句而不是删规则：
+"静默"原来在两段里各说一遍，现在只说一遍。
+
+**验证**：450 用例全绿（新增 `tests/daily-first.test.js` 17 例）。真实链路跑一轮：
+只写结论 → 工具返回值点出缺口 → 补写流水 → `projects/<id>/daily/<今天>.md` 落盘、
+索引里 `[key]` 与 `[daily]` 两条并存、账本两条可查 → 再写结论时提醒消失。
+
+### 8.16 QUEUE 时效归档 + 标签字段名化（v0.7.0）
+
+**问题**：`QUEUE.md` 只有「被检索召回 → 晋升」这一条出口，从不被召回的候选会无限期堆积；
+而条目头部的 `[queue:key|project|2e242607bffb]` 是**位置编码**——三个值谁是谁全靠顺序，
+`track`（写进哪条轨）与 `scope`（全局 / 项目作用域）本是两个正交维度，挤在一起无法一眼分辨，
+新增字段还会静默错位。
+
+**做法**：
+
+| 层 | 改动 |
+|---|---|
+| 时效 | 新增 `queueStaleDays`（**默认 90 天**，`0` = 关闭，钳制 `0..3650`）。整合 `buildPlan` 增加 3.8 步：超龄且从未被召回 / 复述的候选产生 `queue-expire` 提议 |
+| 落地 | `applyPlan` 把候选从 `QUEUE.md` **移入** `QUEUE-archive.md`（移动，不是删除），仍可 `mem_search(includeArchived=true)` 显式召回；账本计数与 `renderPlan` 同步展示 |
+| 优先级 | 已被召回的候选走 `promote`，`queue-expire` 不抢同一条（晋升优先于归档） |
+| 标签 | 写入侧改为字段名式 `[queue:track=key scope=project id=2e242607bffb]`；`parseQueueBody` 兼容旧的位置式、字段顺序无关，存量数据零迁移成本 |
+
+**一条有意的保留**：`track=project` 没有归一化为 `memory`。project 在这里是**低信任写入**
+（`NEEDS_CONFIRM` 不含它，免 confirm 直写）并配合 `source=agent-inferred` 自动标可疑；
+归一化会同时抹掉这个语义、并给流水轨凭空加一道确认门槛。曾尝试归一，全量测试 5 例失败后回退。
+
+**验证**：全量用例全绿（新增 `tests/queue-expire.test.js` 3 例、
+`tests/parse-queue-body.test.js` 8 例；`tests/session-extract.test.js` 同步覆盖新标签）。
+
+### 8.17 召回与一致性：预取、证据门槛、评测（v0.8.0–0.8.1）
+
+0.8.0 不再扩大工具面，而是补 0.7.0 暴露出的几个缺口：
+
+| 缺口 | 0.8.0 的做法 | 边界 |
+|---|---|---|
+| pointer 模式"记忆存在但没被用上" | `pointerRecallTopN`（默认 2）每轮自动预取 **global / user / 当前项目 key** 的核心条目；不是全量目录，也不改变"其余按需检索" | 宿主没有把当前用户消息交给注入渲染，所以这不是按 query 的语义召回；它是**核心记忆预取**，不是完整 auto-recall |
+| 队列"召回一次就转正"可能放大错误 | `queuePromoteMinHits`（默认 2）：同一候选被召回两次才自动转正；`queue-expire` 跳过保护性关键词 | 仍是启发式；没有置信度/降级 UI |
+| 注入形态固定 | `indexMode: 'auto'`：小库（≤`autoIndexMaxEntries`，默认 40）走 index，大库走 pointer，空库走 pointer | 默认仍是 pointer，避免改变既有行为 |
+| 没有记忆质量回归 | `npm run eval`：4 个固定查询 + pointer 预取 + 队列证据门槛；`tests/eval-memory.test.js` 纳入全量测试 | 样本小，只用于回归，不是 LongMemEval / LoCoMo |
+| 工具名单三处漂移 | `lib/tool-names.js` 单一来源；`mem_audit` 的 `tools.self` 改为读它 | README/docs 的人工表格仍需随版本更新，但代码侧不再三份名单 |
+
+**验证**：476 个用例全绿（新增 `tests/recall-080.test.js`、`tests/eval-memory.test.js`、保护性队列超期 1 例、预取质量 2 例）。GLOBAL 槽位最多预取 1 条并显示槽值；口令/密钥类条目不自动预取。**明确未做**：时序有效性（valid_from/valid_to）、本地嵌入/reranker、daily→结论自动候选、Web 鉴权/静态加密、多设备同步。这些需要 schema 或宿主 API 变更，留到下一版，不用"已支持"措辞。
+
+
 ## 9. 验证（六段证据，全部可复现）
 
 ```powershell
 $node = "$env:LOCALAPPDATA\Programs\VanWork\resources\runtime\node.exe"
 cd C:\Users\cairz01\VanWork\plugins\vanwork-memory-core
 
-# ① 单元测试（263 个：扫描/索引/检索/整合/取代/云端/注入/装配/存储接管/锁与审计/配置写入器/可疑标记/索引分槽/分层压缩）
+# ① 单元测试（304 个 / 13 个文件：扫描/索引/检索/整合/取代/云端/注入/装配/存储接管/锁与审计/配置写入器/可疑标记/索引分槽/分层压缩）
 & $node scripts/test-inproc.mjs          # 进程内跑，沙箱可用；结果看 TAP 的 # pass / # fail
 #   非沙箱环境可直接：node --test tests/
 
@@ -590,7 +876,7 @@ $env:DSH_HOME = "<你的 dsh-home>"
 
 | 证据 | 证明了什么 |
 |---|---|
-| ① 171 个用例 | 每个模块的行为与不变量（含 8 个真实踩过的坑的回归：undefined 打挂索引 / 矛盾先于重复 / 归档轨判定 / 归档格式契约 / 陈旧锁回收 / `markSuperseded` 的未定义变量 / 锁参数没透传 / 工具名硬编码） |
+| ① 476 个用例 | 每个模块的行为与不变量（含 10 个真实踩过的坑的回归：undefined 打挂索引 / 矛盾先于重复 / 归档轨判定 / 归档格式契约 / 陈旧锁回收 / `markSuperseded` 的未定义变量 / 锁参数没透传 / 工具名硬编码 / 摘要行被切成孤立条目 / `inline-tag` 误判合法写法） |
 | ② 13 步自检 | 逻辑链路端到端成立（忠实的 ctx 替身） |
 | ③ `probe:mount` | **apply 在真实 cordis 树下、拿真实服务跑通**：7 个工具进真实 ToolRuntime、真实 `systemPrompt.assemble()` 里出现 `memory-core:index` 并渲染出真实条目、工具经真实注册表执行能改到真实文件 |
 | ④ `probe:profile` | **bundle 解析 + patch 解析成立**：`dsh --dump-config` 组合树里出现 `# == vanwork-memory-core` 与 insert 行，无 skipped bundle 告警 |
@@ -649,7 +935,10 @@ vanwork-memory-core/
 │   ├── inject.js         # 索引常驻注入（预算 + 陈旧 + 自修复 + 会话身份 + 写入交接）
 │   ├── audit.js          # 「谁在管存储」的自证报告（mem_audit）
 │   ├── tools.js          # 七个 mem_* 工具
-│   └── runtime.js        # 索引生命周期 + 快照缓存 + 每会话轮次/未写计数
+│   ├── runtime.js        # 索引生命周期 + 快照缓存 + 每会话轮次/未写计数
+│   ├── devfiles.js       # 开发者模式：全部 md 的清点 + 每类文件的功能说明 + 注入信号灯（8.13）
+│   ├── api.js            # 管理界面 REST 契约（同一闸门：锁/备份/原子写/修订）
+│   └── client.js         # 设置页「记忆管理」面板（总开关 / 开发者模式 / 编辑器）
 ├── scripts/
 │   ├── test-inproc.mjs   # 进程内测试跑法（沙箱可用：绕开 node --test 的子进程）
 │   ├── verify.mjs        # 端到端自检（忠实 ctx 替身，13 步）
@@ -657,7 +946,7 @@ vanwork-memory-core/
 │   ├── profile-probe.mjs # 真实 profile 组合探针（dsh --dump-config）
 │   ├── profile-switch-probe.mjs  # 「禁用旧插件 + 启用本插件」的启动安全验证
 │   └── archive-contract.mjs      # 跨插件归档格式契约（用对方的 ArchiveStore 读回）
-└── tests/                # 7 个测试文件 / 171 个用例
+└── tests/                # 26 个测试文件 / 476 个用例
 ```
 
 ## 11. 文档
@@ -674,7 +963,7 @@ vanwork-memory-core/
 | 项 | 值 |
 |---|---|
 | 插件 `name` | `vanwork-memory-core`（规范允许无 scope；若要进内部镜像并希望三级目录，可改为 `@vanwork/dsh-memory-core`） |
-| 插件 `version` | `0.4.1` |
+| 插件 `version` | `0.8.1`（以 `package.json` 为准） |
 | 目标 dsh 版本 | **0.2.0-rc.2** |
 | 插件形态 | **Host 半 + Client 半**（`lib/index.js` + `lib/client.js`；设置页「记忆管理」） |
 | 注册的插槽 | `settings.section`，`id: vanwork-memory-core`，`order: 35`（不涉及 `sidebar.panellist` / `main` / `plugins.item`，因此 `id == key` 与 `locale` 的约束不适用） |
@@ -697,7 +986,7 @@ vanwork-memory-core/
 
 ### 12.2 为什么没有 `src/` 与构建配置（按规范第 2 节的「建议」项说明）
 
-本插件的**源码就是 `lib/*.js`**：25 个纯 ESM 模块（24 个 Host 模块 + 1 个 Client 模块）、零转译、零打包。这是刻意的取舍——
+本插件的**源码就是 `lib/*.js`**：31 个纯 ESM 模块（30 个 Host 模块 + 1 个 Client 模块）、零转译、零打包。这是刻意的取舍——
 规范建议 `src/` + tsdown 是为了便于审计，而「发布的字节 = 审计的字节」在可审计性上更强，
 也顺带消掉了规范第 7.2 节点名的 `prepare` 打包陷阱。`files` 已包含 `lib`、`docs`、`scripts`、`tests`
 （`scripts/` 与 `tests/` 是可复现验证，`docs/` 是技术文档，一并交付便于复核）。
@@ -727,20 +1016,20 @@ cd C:\Users\cairz01\VanWork\plugins\vanwork-memory-core
 # 1) Host 半可加载（规范第 7 节最小自检）
 & $node --input-type=module -e "import('./lib/index.js').then(m=>console.log('host OK', Object.keys(m)))"
 
-# 2) 验证（12 个测试文件 + 端到端 + 真实装载 + 真实 profile 组合 + 切换安全 + 跨插件归档契约）
+# 2) 验证（26 个测试文件 + 端到端 + 真实装载 + 真实 profile 组合 + 切换安全 + 跨插件归档契约）
 & $node scripts/test-inproc.mjs
 & $node scripts/verify.mjs; & $node scripts/mount-probe.mjs; & $node scripts/profile-probe.mjs
 & $node scripts/archive-contract.mjs
 
 # 3) 打包（官方 npm 12 的 npm-cli.js，由 node 直接执行；本机运行时未随附 npm/pnpm）
-& $node <npm-12>/bin/npm-cli.js pack --ignore-scripts
+& $node <npm-cli> pack --ignore-scripts
 # 4) sha256
-Get-FileHash .\vanwork-memory-core-0.4.1.tgz -Algorithm SHA256
+Get-FileHash .\vanwork-memory-core-0.8.1.tgz -Algorithm SHA256
 ```
 
 > **关于工具链（如实说明）**：VanWork 随附的运行时只有 `node.exe`，没有 npm / pnpm。
-> 0.2.0 用当时的 `pnpm pack` 产出；**本次交付改用官方 `npm@12.2.1` 的 `npm-cli.js`
-> 直接执行 `npm pack`**，产物即 npm 原生 tgz（含 `package/` 前缀），满足规范第 7.1 节。
+> 0.2.0 用当时的 `pnpm pack` 产出；0.8.1 交付使用本机可用的官方 npm CLI 10.9.3 的 `npm-cli.js`
+> 直接执行 `npm pack`，产物仍是 npm 原生 tgz（含 `package/` 前缀），满足规范第 7.1 节。
 > 该包**没有任何构建步骤**，任何机器上打出的内容都一致（除时间戳）。
 
 ### 12.5 配置项（让用户填什么）
@@ -763,3 +1052,28 @@ Get-FileHash .\vanwork-memory-core-0.4.1.tgz -Algorithm SHA256
 | 0.3.1 – 0.3.6 | 可疑记忆（内容寻址 + 保护性关键词）、索引分槽（位置稳定，6h 重排）、按月打包 + 月摘要、管理界面（`/api/memory-core/*` 11 条路由 + 设置页「记忆管理」），以及界面 404 的真因修复（`ctx.get('webServer')` 在插件上下文里拿不到） |
 | **0.4.0** | **槽位式全局记忆 `GLOBAL.md`**：槽间叠加 / 槽内重写 / 封顶 8 槽 × 80 字，替代"挑选式概览"（改一个槽不影响别的槽、一个槽只有一个当前值、不会逐月膨胀） |
 | **0.4.1（本次交付）** | ① 新增 [`docs/记忆插件技术文档.md`](docs/记忆插件技术文档.md)（存储 / 管理 / 检索的完整规则，含全部配置项与故障处置）；② README 第 12 节按 0.4.1 现状重写（Host+Client 形态、插槽、打包工具链）；③ 打包改用官方 `npm@12` 的 `npm pack`；④ 解包后自检（host import / 12 个测试文件 / 端到端 / client 渲染冒烟）。**行为与 0.4.0 一致**，无功能变更 |
+| **0.4.2** | **运行时总开关（8.10 节）**：设置页「记忆管理」顶部「启用记忆」开关，状态落 `<coreDir>/switch.json`（缺文件=启用），点击即生效无需重启；停用时注入返回空、`mem_*` 工具调用期拒绝（注册表不动）；新增 `GET/POST /api/memory-core/switch`，`/state` 带 `enabled`。**注：本版本改动因本机命令通道故障未跑回归，重启 VanWork 后应执行 `scripts/test-inproc.mjs`（见第 9 节）** |
+| **0.4.3** | **修复路由注册连坐中断（8.11 节）**：宿主 exact 路由按路径判重（不含方法），同路径 GET/POST 分开注册必然在第二条抛 `duplicate exact route` 并中断后续全部注册——0.4.2 当天面板整组 404 即此因；**存量 bug**：0.4.0/0.4.1 的 `POST /global`（面板保存）从未注册成功过。修为按路径聚合、handler 内按方法分发。同样未跑回归（命令通道故障），重启后执行 `scripts/test-inproc.mjs` |
+| **0.4.4** | **修复时间戳模式切块把摘要行切成孤立条目（8.12 节）**：`[summary:…]` 是条目前缀（`buildBody` 放在时间戳之前独占一行），但 `scanner.splitIntoEntries` 与 `memfile.readChunks` 两套切块实现都只按 `STAMP_RE` 判边界 → 下一条的摘要被并进上一条末尾且缺换行；**索引里 A 的正文因此"包含"了 B 的摘要**，模型拿索引正文当 `match` 会唯一命中被污染的 A，`replace` 就把结构写坏（工具以为匹配唯一且正确）。修法：① 切分点改为"尾部连续标签行 + 时间戳行"（`isTagOnlyLine`，两模块共用同一判定）；② `mem_write` 的 `replace`/`supersede` 拒绝 `match` 纯标签行、拒绝 `content` 含行内标签；③ `validate` 新增 `inline-tag`；④ 新增 `scripts/repair-inline-tags.mjs`（`npm run repair:tags`，默认 dry-run，`--apply` 才写，改前备份、改后复验、幂等）。**304 个用例全绿**；真实损坏文件切块 3 → 2 且索引侧与写入侧一致 |
+| **0.4.5** | **记忆到底有没有被用上：从"感觉"到"数字"**（对照阿里云百炼 Memory 的「观测与审计」与 `min_score`）。① **修一个度量层缺陷**：`mem_search` 原先只在命中时写账本、空查被提前 `return` 抹掉 → **命中率恒为 100%**（幸存者偏差，且发生在度量层，让后续所有"要不要改检索"的判断都失去依据）。改为**先记后返回**，空查与异常一律 `ledger.append('search', {hits, ok, top, filteredByScore})`；口径收敛进新模块 `lib/querylog.js`（纯函数；`hits` 缺失的老记录不计入分母，升级前的账本不污染比率）。② **新增第 9 个工具 `mem_query_log`**：命中率 / 空查簇（重叠度聚类，不是字符串相等——中文换语序 token 集合就会变）/ 平均最高分 / 单查询的分位标定；**只读**。③ **`mem_health` 新增「检索观测」一节**，并在空查率 ≥50% 时明确写"**先别调检索参数**"（通常意味着该记的没记下来，或查询式用了代词）。④ **`searchMinScore` + `searchMinScoreMode`**：`percentile`（丢掉低于本批候选 p75 的，自动随记忆集漂移）或 `absolute`（本机标定过的绝对分）；**默认 0 = 关闭**——百炼的 0.3 不能照抄，因为本插件的 `finalScore = rrf × (0.6+0.4×importance)`，开向量后 rrf 整体上移。过滤在**全池**上做、最后才切 `limit`。未命中文案区分"没召回"与"被门槛砍掉"。⑤ **`scripts/calibrate-search.mjs`**（`npm run calibrate`）：读真实账本，对照命中组/空查组的最高分分布，找"零误杀"门槛并给出可直接粘贴的 YAML；样本 < 20 条时**拒绝给建议**（exit=2 = 再攒几天，不是失败）。⑥ **修 `recencyHalfLifeDays` 装饰性配置**：`retrieve.js` 会读它但 `DEFAULTS` 里没有 → 改这一项此前**完全无效**（0.4.5 补登记 + 钳制 `1..3650`）。⑦ 注入纪律补一句"查询式要自足，不要用代词"。**333 个用例全绿**（13 → 15 个测试文件）；`verify.mjs` / `mount-probe.mjs` / `client-smoke.mjs` 全通过 |
+| **0.4.6 → 0.4.8** | **补上"第一轮根本没有入口"这个洞**（S1 实测三轮才定位）。现象：headless 下模型对用户陈述只回"记下了，要不要我记到项目记忆里"，**一次 mem_write 都没调**，后续 2 道回忆题答"没有这条记录"；后几步虽调了工具却不带 confirm，全部落进 `QUEUE.md` 候选（按设计不进常驻索引）→ 命中率 4/6 冻在那儿。排查链：① 0.4.6 加页脚「写入纪律」（`config.writeDiscipline`）→ 队列问题解决（写入落 `MEMORY.md` 正本），首轮仍不写；② 0.4.7 把同一条放到索引首位 → **完全无效，是死代码**（改动在 `renderIndexSnapshot` 里，而调用方空库时已 `return ''`）；③ 0.4.8 找到真根因：`renderSnapshotFor` 里的 `if (entries.length === 0) return ''` —— **空库时一行都不注入**，模型连"有记忆工具"都不知道。改为注入两行空库提示（`config.emptyIndexHint`，默认开，约 60 token，只到第一条记忆落盘为止）。效果：S1 命中 4/6 → **6/6**，延迟 8.3s → 6.8s，名义成本降 33%，19 次工具调用全是 `mem_*`（0 次文件系统旁路）。**339 个用例全绿**（新增 `tests/write-discipline.test.js`；两条断言"空库返回空串"的旧契约按新行为改写，并保留 `emptyIndexHint=false` 的回退用例） |
+| **0.6.0** | **开发者模式（8.13 节）**：设置页「记忆管理」新增第二个开关，打开后记忆根下**全部 `.md`** 可整份查看/编辑，每个文件带一句话功能说明 + 注入信号灯（🟢常驻 / 🔵按需 / ⚪仅留档 / 🟡派生物）。**默认关闭**（缺文件=关），关闭时 `/devfile` 读写一律 403 且 `/dev` 不返回清单；只开放 Markdown、路径守卫在记忆根内、整份替换必须带 `base`（缺失 400 / 不匹配 409）、写入仍走备份+原子写+修订+索引失效。两个开关互不依赖。新增 `lib/devfiles.js` 与 `GET/POST /api/memory-core/dev|devfile`。**412 个用例全绿**（新增 `tests/dev.test.js` 18 例；`safe-edit` 的路由条数断言 9→11）|
+| **0.6.1** | **预建全部记忆文件 + 文件头说明（8.14 节）**：`precreateFiles` 默认开，装载与打开面板时幂等补齐（root 五个 + 已存在项目三个），只写不存在的路径；每个文件头部带一句功能说明（HTML 注释）并自述角色与注入方式（🟢🔵⚪🟡🟠）。**同时修掉一个存量缺陷**：文件头注释会被当成一条记忆（实测 `GLOBAL.md` 第 1 条 `# 记忆…` 就在常驻注入池里）——新增 `splitHeaderComments`（注释 + 紧随的一级标题 = 页眉，兼容旧的「标题在前」格式），扫描与写入两侧同一判定，`renderSlots` 把注释放到标题之前。开发者模式清单新增「未创建」占位行（虚线框可一键新建）并改为先按目录分组排序。**433 个用例全绿**（新增 `tests/precreate.test.js` 21 例）|
+| **0.6.2** | **先流水、后结论（8.15 节）**：`dailyFirstWrite` 默认开。写入纪律文本抽成 `inject.renderWriteRules()` **单一来源**（索引模式与按需检索模式共用），两段写成两个显式步骤：① 有实质进展先 `mem_write(track="daily")` 追加流水（免 confirm）② 结论/决策再写 `key`/`memory`/`user`（confirm=true 才直写正轨），并点名"别跳过它只写结论"。空库首屏 `【先写后答】`、`mem_write` 工具描述、`renderWriteHint` 同步改口径。**确定性兜底**：写结论落到正轨而当天该 scope 还没有 daily 条目时，工具返回值追加一行提示（不自动补写——那会让流水变成结论的回声）。**450 个用例全绿**（新增 `tests/daily-first.test.js` 17 例）|
+| **0.8.1（本次交付）** | **预取质量修正**：GLOBAL 槽位不再挤占项目 key（每轮最多 1 条 global），预取显示槽值而不是 `## 槽名`；无日期条目不再输出空 `—  ::`；口令/密钥/凭证类条目不自动预取（仍可 `mem_read` 显式读）。476 用例全绿 |
+| **0.8.0** | **召回与一致性**：pointer 核心预取（`pointerRecallTopN` 默认 2，只取 global/user/当前项目 key）；队列证据门槛（`queuePromoteMinHits` 默认 2）与保护性 `queue-expire`；`indexMode:auto`；`npm run eval` 冒烟评测；`lib/tool-names.js` 单一工具名单（audit 的 7 个旧名单修正为 10 个）。474 用例全绿。明确未做：时序有效性、本地嵌入/reranker、daily→结论自动候选、Web 鉴权/加密、多设备同步 |
+| **0.7.0** | **QUEUE 时效归档 + 标签字段名化（8.16 节）**：① 新增 `queueStaleDays`（默认 90 天，`0` 关闭）与整合动作 `queue-expire`——超龄且从未被召回的 `QUEUE.md` 候选**移入** `QUEUE-archive.md`（移动非删除，仍可 `mem_search(includeArchived=true)` 召回），晋升优先于归档；② QUEUE 标签由位置式 `[queue:key\|project\|xxx]` 改为字段名式 `[queue:track=key scope=project id=xxx]`，`parseQueueBody` 兼容旧格式且字段顺序无关；③ 明确保留 `track=project` 的低信任写入语义（不归一化为 `memory`）。**465 个用例全绿**（新增 `tests/queue-expire.test.js` 3 例、`tests/parse-queue-body.test.js` 8 例）。同时校正文档里滞后的版本号：第 12 节交付表 `0.4.8` → `0.7.0`，技术文档头部改为「0.4.8 实现基线 + 现行版本以 `package.json` 为准」的如实表述 |
+
+### 12.7 0.4.5 的对照记录：哪些借鉴了、哪些没抄
+
+> 来源文档：[核心概念](https://docs.bailian.console.aliyun.com/zh/model-studio/memory/concepts)、[长期记忆 API](https://docs.bailian.console.aliyun.com/zh/model-studio/long-term-memory-2-0)、[SearchMemory](https://help.aliyun.com/zh/model-studio/memory/search-memory)、[记忆观测](https://help.aliyun.com/zh/model-studio/memory/observation)、[记忆审计](https://help.aliyun.com/zh/model-studio/memory/audit)。
+
+| 百炼的做法 | 我们的处置 | 理由 |
+|---|---|---|
+| 观测 + 审计双视图（会话 ↔ 记忆变更并排） | **借鉴**（0.4.5 的 ①③） | 我们缺的正是"助手说过的话有没有变成记忆"这个视角，而账本里本来就有数据，只是空查没记 |
+| `min_score`（0.3 / 建议 0.5–0.7） | **借鉴概念，不照抄数值**（④⑤） | 绝对分不可移植（RRF 随融合路数漂移）→ 改成分位，并提供本机标定脚本 |
+| `messages[]` 入参（能理解代词） | **不引入多轮入参**，改为在注入纪律里要求"查询式自足" | 检索工具是模型主动调用的，一次调用传一段对话会把工具面复杂化；先要求它把话说全 |
+| `memory_types`（observation / skill，默认只查 observation） | **暂不做** | 我们的 `track` 已经区分层次（`global/user/memory/project/daily/archive`），再叠一层类型会与 `track` 语义打架；等观测数据显示"日志与结论混检"是真问题再说 |
+| 每轮对话后自动抽取写入（`AddMemoryAsync` + 事件轮询） | **不做**（保持显式 `mem_write` + 写入门槛递增） | 自动抽取是"低成本高噪声"的路线；我们的空查率如果高，99% 是"该写的没写"，应该改的是**怎么写**，而不是让机器替用户决定记什么 |
+| 记忆库 / 实体 / 项目三层隔离 | **不需要** | 单机单用户；`scope × track` 与 git remote 归一化的 `projectId` 已经覆盖，且比字符串 `project_id` 更强（换 clone 认得出同一个项目） |
+| 画像模板（属性清单，未抽取的返回空值） | **待议** | 我们的 `GLOBAL.md` 槽位模型在"一个槽只有一个当前值"上更强；可借鉴的只有"期望槽名清单 → 漏了的显式化"。见技术文档 §3.7 后续 |

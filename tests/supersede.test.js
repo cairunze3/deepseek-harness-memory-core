@@ -20,6 +20,7 @@ import { after, beforeEach, describe, it } from 'node:test'
 
 import { detectContradictions, detectRevisionSignals, valueConflicts, valuePairs, applyPlan, buildPlan, planIdOf } from '../lib/consolidate.js'
 import { markSuperseded, supersededTag } from '../lib/memfile.js'
+import { entrySlotKey } from '../lib/slots.js'
 import { renderIndexSnapshot } from '../lib/inject.js'
 import { resolveConfig } from '../lib/config.js'
 import { dateStamp } from '../lib/fsutil.js'
@@ -173,7 +174,7 @@ describe('apply 的授权边界', () => {
     return { config, plan: buildPlan({ entries: scan.entries, files: scan.files, config, now: Date.now(), memoryDir: root }) }
   }
 
-  it('取代提议在方案里可见，但 apply 不带 supersede=true 时一个文件都不动', () => {
+  it('取代提议在方案里可见，但 apply 不带 supersede=true 时一个记忆文件都不动', () => {
     const scan = fixture()
     const { config, plan: built } = plan(scan)
     assert.equal(built.counts.supersede, 1)
@@ -185,7 +186,9 @@ describe('apply 的授权边界', () => {
       entries: scan.entries, files: scan.files, confirm: true,
     })
     assert.equal(outcome.ok, true)
-    assert.equal(outcome.applied.length, 0, '默认不执行取代')
+    // 未授权时不执行任何"改记忆正本"的动作；只允许贴不动正文、可逆的可疑标记。
+    assert.ok(outcome.applied.every((a) => a.type === 'suspect'), '只可贴可疑标记，不可合并/取代/归档')
+    assert.equal(outcome.applied.filter((a) => a.type !== 'suspect').length, 0, '默认不执行取代')
     assert.match(outcome.reason, /supersede=true/)
     assert.equal(readFileSync(keyPath, 'utf8'), before, '文件必须原样')
   })
@@ -207,12 +210,12 @@ describe('apply 的授权边界', () => {
     // 项目 key 轨的归档与 memory-evolve 的 ArchiveStore 同名（记忆 Tab 归档页签可见）
     const archived = readFileSync(join(root, 'projects', 'p1', 'KEY-archive.md'), 'utf8')
     assert.ok(archived.includes('走 SQLite FTS5 BM25 关键词检索。'), '旧结论**留档**而不是被抹掉')
-    assert.ok(/\[superseded-by:[0-9a-f]{20}\]/.test(archived), '带取代标记与取代者 id')
+    assert.ok(/\[superseded-by:[0-9a-f]{16}\]/.test(archived), '带取代标记与取代者的内容寻址键')
     assert.ok(existsSync(join(core, 'backups')), '原文件已备份')
 
-    // 用于取代的 id 必须是"较新那条"的稳定 id
+    // 取代指针用"较新那条"的内容寻址键（正文 hash），而非位置敏感的 entryId
     const newer = scan.entries.find((entry) => entry.body.includes('改为'))
-    assert.ok(archived.includes(`[superseded-by:${newer.entryId}]`))
+    assert.ok(archived.includes(`[superseded-by:${entrySlotKey(newer)}]`))
   })
 
   it('方案指纹包含取代提议：方案内容一变，看过的那份就不能执行', () => {
