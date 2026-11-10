@@ -10,7 +10,7 @@
   <img alt="tests" src="https://img.shields.io/badge/tests-476%20passed-green">
 </p>
 
-> **Category:** 记忆 / Long-term memory · **Install:** `dsh plugin --profile web add deepseek-harness-memory-core`
+> **Category:** 记忆 / Long-term memory · **Install:** `dsh plugin --profile web add vanwork-memory-core`
 
 ## What problem this solves
 
@@ -53,7 +53,7 @@ Derived index (SQLite FTS5 / pure-JS fallback, fully rebuildable)
 
 ```bash
 # From npm (recommended)
-dsh plugin --profile web add deepseek-harness-memory-core
+dsh plugin --profile web add vanwork-memory-core
 ```
 
 Or from a local tarball / git checkout:
