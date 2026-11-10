@@ -25,19 +25,7 @@ Long-running agents forget. Naive memory systems either inject everything every 
 
 The core idea: it **does not own** the memory content. Memory remains plain Markdown on disk. This library owns only **derived indexes** (deletable & rebuildable at any time) plus **audit artifacts** (ledger, revisions, backups).
 
-```text
-Memory canon (Markdown, shared files)
-        │  read-only scan
-        ▼
-Derived index (SQLite FTS5 / pure-JS fallback, fully rebuildable)
-        │
-        ├── per-turn inject: resident index (hard budget 120 lines / 8KB, self-repairing)
-        ├── write orchestration: lock + backup + atomic write + supersede archiving
-        ├── on-demand retrieval: BM25 + optional vectors + RRF
-        ├── self-audit: "who actually manages the store" (recomputable report)
-        ├── low-frequency consolidation: near-dupe merge / log distillation / cold archive
-        └── cloud tiering: classifyEntry + redactForCloud (offline by default)
-```
+<img src="docs/workflow.svg" alt="Memory workflow: Markdown canon → derived index → per-turn inject / retrieval / consolidation / cloud tiering" width="100%">
 
 ## Why it's different
 

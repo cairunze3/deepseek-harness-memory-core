@@ -1,0 +1,76 @@
+<svg viewBox="0 0 680 440" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>vanwork-memory-core 记忆工作流</title>
+<desc>从 Markdown 记忆正本到派生索引，再到每轮注入、按需检索、低频整合、云端分层四个能力的流程</desc>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+  <text x="40" y="32" font-family="var(--font-sans)" font-size="15" font-weight="500" fill="#26215C">vanwork-memory-core · memory workflow</text>
+
+  <g>
+    <rect x="40" y="52" width="200" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="140" y="72" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="14" font-weight="500" fill="#0C447C">Markdown 正本</text>
+    <text x="140" y="90" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#185FA5">只读 · 不拥有内容</text>
+  </g>
+
+  <line x1="240" y1="80" x2="300" y2="80" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect x="300" y="52" width="200" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="400" y="72" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="14" font-weight="500" fill="#0C447C">派生索引</text>
+    <text x="400" y="90" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#185FA5">SQLite FTS5 · 可重建</text>
+  </g>
+
+  <line x1="500" y1="80" x2="560" y2="80" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect x="560" y="52" width="80" height="56" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+    <text x="600" y="80" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="13" font-weight="500" fill="#085041">零依赖</text>
+  </g>
+
+  <line x1="140" y1="108" x2="140" y2="148" stroke="#5F5E5A" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <line x1="400" y1="108" x2="400" y2="148" stroke="#5F5E5A" stroke-width="1.5" stroke-dasharray="3 3"/>
+
+  <text x="40" y="150" font-family="var(--font-sans)" font-size="13" font-weight="500" fill="#26215C">四个下游能力</text>
+
+  <line x1="400" y1="170" x2="400" y2="190" stroke="#5F5E5A" stroke-width="1.5"/>
+  <line x1="400" y1="190" x2="70" y2="190" stroke="#5F5E5A" stroke-width="1.5"/>
+  <line x1="400" y1="190" x2="610" y2="190" stroke="#5F5E5A" stroke-width="1.5"/>
+  <line x1="70" y1="190" x2="70" y2="210" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="610" y1="190" x2="610" y2="210" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect x="40" y="210" width="140" height="64" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+    <text x="110" y="232" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="13" font-weight="500" fill="#27500A">每轮注入</text>
+    <text x="110" y="250" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#3B6D11">硬预算 120 行/8KB</text>
+    <text x="110" y="266" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#3B6D11">溢出自修复</text>
+  </g>
+
+  <g>
+    <rect x="200" y="210" width="140" height="64" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+    <text x="270" y="232" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="13" font-weight="500" fill="#27500A">按需检索</text>
+    <text x="270" y="250" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#3B6D11">BM25 + 向量 + RRF</text>
+    <text x="270" y="266" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#3B6D11">条目级 · 可解释</text>
+  </g>
+
+  <g>
+    <rect x="360" y="210" width="140" height="64" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+    <text x="430" y="232" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="13" font-weight="500" fill="#3C3489">低频整合</text>
+    <text x="430" y="250" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#534AB7">取代式修正</text>
+    <text x="430" y="266" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#534AB7">指纹校验 · 可审计</text>
+  </g>
+
+  <g>
+    <rect x="520" y="210" width="140" height="64" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+    <text x="590" y="232" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="13" font-weight="500" fill="#3C3489">云端分层</text>
+    <text x="590" y="250" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#534AB7">classify + 脱敏</text>
+    <text x="590" y="266" text-anchor="middle" dominant-baseline="central" font-family="var(--font-sans)" font-size="12" fill="#534AB7">默认离线</text>
+  </g>
+
+  <line x1="40" y1="274" x2="640" y2="274" stroke="#5F5E5A" stroke-width="1.5"/>
+
+  <text x="40" y="300" font-family="var(--font-sans)" font-size="12" fill="#5F5E5A">10 个 mem_* 工具：search · read · write · extract · health · query_log · global · audit · consolidate · reindex</text>
+  <text x="40" y="320" font-family="var(--font-sans)" font-size="12" fill="#5F5E5A">写入编排：跨进程锁 · 备份 · 原子写 · 取代留档 —— 每次变更先备份，绝不静默破坏性删除</text>
+</svg>
